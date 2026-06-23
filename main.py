@@ -67,10 +67,11 @@ async def login_flow(page, session, mobile, api_url):
     await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000)
     await page.wait_for_timeout(3000)
 
-    # Click first input and type mobile
+    # Click mobile input and type number (target the specific input#mobile-number selector)
     print(f"[*] Typing mobile number: {mobile}...", file=sys.stderr, flush=True)
-    mobile_input = page.locator("input").first
+    mobile_input = page.locator("input#mobile-number, input:visible").first
     await mobile_input.click()
+    await mobile_input.fill("") # Clear input first
     await page.keyboard.type(mobile, delay=100)
     await page.wait_for_timeout(1000)
     
@@ -95,6 +96,20 @@ async def login_flow(page, session, mobile, api_url):
 
     if not otp:
         print("[DEBUG] OTP lookup timed out or failed.", file=sys.stderr, flush=True)
+        try:
+            screenshot_path = os.path.join(USER_DATA_DIR, "login_timeout_error.png")
+            await page.screenshot(path=screenshot_path)
+            print(f"[*] Saved login timeout screenshot to {screenshot_path}", file=sys.stderr, flush=True)
+            
+            # Print any visible alert/error text on the page
+            text_content = await page.evaluate("() => document.body.innerText")
+            print("[*] Scanning login page text for error messages...", file=sys.stderr, flush=True)
+            for line in text_content.split('\n'):
+                line = line.strip()
+                if line and any(keyword in line.lower() for keyword in ["error", "invalid", "not found", "failed", "required", "wrong", "not register", "denied", "please"]):
+                    print(f"    -> [ALERT MESSAGE] {line}", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[*] Failed to log timeout diagnostic info: {e}", file=sys.stderr, flush=True)
         return False
 
     await page.wait_for_timeout(3000)
