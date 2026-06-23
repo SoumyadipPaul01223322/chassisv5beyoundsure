@@ -62,7 +62,12 @@ async def is_logged_in(page):
         return False
 
 async def login_flow(page, session, mobile, api_url):
-    await print_current_cookies(page.context, "Start of login_flow")
+    await print_current_cookies(page.context, "Start of login_flow (before clear)")
+    # Clear all cookies to ensure no stale CSRF tokens / 419 Page Expired errors
+    print("[*] Clearing context cookies to start a fresh login session...", file=sys.stderr, flush=True)
+    await page.context.clear_cookies()
+    await print_current_cookies(page.context, "Start of login_flow (after clear)")
+
     print(f"[*] Navigating to {TARGET_URL_BASE}/login...", file=sys.stderr, flush=True)
     await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000)
     await page.wait_for_timeout(3000)
@@ -192,6 +197,9 @@ async def grab_cookies(
                 )
                 
                 page = context.pages[0] if context.pages else await context.new_page()
+
+                # Pipe browser console messages to container output for visibility into client errors
+                page.on("console", lambda msg: print(f"[BROWSER CONSOLE] {msg.type}: {msg.text}", file=sys.stderr, flush=True))
 
                 # Load manually saved cookies to bypass browser-session cookie deletion
                 cookies_file = os.path.join(USER_DATA_DIR, "cookies.json")
