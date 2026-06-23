@@ -3,12 +3,24 @@ from fastapi import FastAPI, HTTPException, Query
 from playwright.async_api import async_playwright
 import re
 import asyncio
+import os
+import sys
+import traceback
 
-app = FastAPI(title="Chassis Cookie Grabber API (v5)")
+app = FastAPI(
+    title="Chassis Cookie Grabber API (v5)",
+    description="API to automate session cookie acquisition safely."
+)
 
 USER_DATA_DIR = "./chrome-session"
 POLL_INTERVAL = 2
 MAX_POLLS = 60
+
+# Fetch default configurations from environment variables to avoid exposing credentials or domains in code
+DEFAULT_MOBILE = os.getenv("DEFAULT_MOBILE", "")
+DEFAULT_RC_NUMBER = os.getenv("DEFAULT_RC_NUMBER", "")
+DEFAULT_TEMP_MAIL_API = os.getenv("DEFAULT_TEMP_MAIL_API", "")
+TARGET_URL_BASE = os.getenv("TARGET_URL_BASE", "https://www.insurance.beyondsure.in")
 
 async def get_messages(session, api_url):
     try:
@@ -16,7 +28,8 @@ async def get_messages(session, api_url):
             if r.status != 200:
                 return []
             return await r.json()
-    except:
+    except Exception as e:
+        print(f"[DEBUG] Failed to fetch emails: {str(e)}", file=sys.stderr)
         return []
 
 async def get_latest_otp(session, existing_ids, api_url):
@@ -32,14 +45,15 @@ async def get_latest_otp(session, existing_ids, api_url):
 
 async def is_logged_in(page):
     try:
-        await page.goto("https://www.insurance.beyondsure.in/customer/dashboard", timeout=30000)
+        await page.goto(f"{TARGET_URL_BASE}/customer/dashboard", timeout=30000)
         await page.wait_for_timeout(3000)
         return "dashboard" in page.url
-    except:
+    except Exception as e:
+        print(f"[DEBUG] Login check failed: {str(e)}", file=sys.stderr)
         return False
 
 async def login_flow(page, session, mobile, api_url):
-    await page.goto("https://www.insurance.beyondsure.in/login", timeout=30000)
+    await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000)
     await page.wait_for_timeout(3000)
 
     # Click first input and type mobile
@@ -62,6 +76,7 @@ async def login_flow(page, session, mobile, api_url):
         await asyncio.sleep(POLL_INTERVAL)
 
     if not otp:
+        print("[DEBUG] OTP lookup timed out or failed.", file=sys.stderr)
         return False
 
     await page.wait_for_timeout(3000)
@@ -75,12 +90,24 @@ async def login_flow(page, session, mobile, api_url):
 
 @app.get("/grab")
 async def grab_cookies(
-    mobile: str = Query("7875606906", description="Mobile number to login with"),
-    rc_number: str = Query("UP-99-NKG-8903", description="Vehicle registration number"),
-    temp_mail_api: str = Query("https://api.internal.temp-mail.io/api/v3/email/z9s9ozgjfn@ozsaip.com/messages", description="API endpoint to fetch temp email OTP")
+    mobile: str = Query(None, description="Mobile number (optional, fallback to env)"),
+    rc_number: str = Query(None, description="Vehicle registration number (optional, fallback to env)"),
+    temp_mail_api: str = Query(None, description="Temp mail messages URL (optional, fallback to env)")
 ):
+    # Resolve parameter values, prioritizing request query arguments, then system environment variables
+    req_mobile = mobile or DEFAULT_MOBILE
+    req_rc = rc_number or DEFAULT_RC_NUMBER
+    req_mail_api = temp_mail_api or DEFAULT_TEMP_MAIL_API
+
+    if not req_mobile or not req_rc or not req_mail_api:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing configuration. Parameters must be passed via query string or environment variables."
+        )
+
     async with aiohttp.ClientSession() as session:
         async with async_playwright() as p:
+            context = None
             try:
                 # Launch Chromium headlessly with sandbox disabled for Docker compatibility
                 context = await p.chromium.launch_persistent_context(
@@ -93,20 +120,19 @@ async def grab_cookies(
 
                 # Step 1: Check login status
                 if not await is_logged_in(page):
-                    success = await login_flow(page, session, mobile, temp_mail_api)
+                    success = await login_flow(page, session, req_mobile, req_mail_api)
                     if not success:
-                        await context.close()
-                        raise HTTPException(status_code=500, detail="Failed to log in (OTP not received or login failed).")
+                        raise Exception("Verification flow incomplete or invalid OTP.")
 
                 # Step 2: Open RC retrieval page
                 await page.goto(
-                    "https://www.insurance.beyondsure.in/leads/create/online?insurance_category_id=2&product_category=motor&product_type_id=3&policy_type_id=1&lead_flow=1",
+                    f"{TARGET_URL_BASE}/leads/create/online?insurance_category_id=2&product_category=motor&product_type_id=3&policy_type_id=1&lead_flow=1",
                     timeout=30000
                 )
                 await page.wait_for_timeout(5000)
 
                 # Step 3: Input vehicle registration & fetch Vahan data
-                await page.fill("#vehicle_registration_number", rc_number)
+                await page.fill("#vehicle_registration_number", req_rc)
                 await page.click("#get_vahan_data")
                 await page.wait_for_timeout(5000)
 
@@ -129,12 +155,22 @@ async def grab_cookies(
                 else:
                     return {
                         "success": False,
-                        "error": "Required cookies not found."
+                        "error": "Grab verification failed: session cookies were missing."
                     }
 
-            except Exception as e:
-                try:
-                    await context.close()
-                except:
-                    pass
-                raise HTTPException(status_code=500, detail=str(e))
+            except Exception as err:
+                # Print exception trace to standard error for Docker dashboard logs (hidden from client)
+                print("[ERROR] Internal error captured in Grab pipeline:", file=sys.stderr)
+                traceback.print_exc()
+
+                if context:
+                    try:
+                        await context.close()
+                    except:
+                        pass
+                
+                # Expose a generic, sanitized response to prevent leaking endpoints or internal codes
+                raise HTTPException(
+                    status_code=500,
+                    detail="An error occurred while executing the automation sequence. Please consult system logs."
+                )
