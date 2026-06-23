@@ -60,7 +60,7 @@ async def get_latest_otp(session, existing_ids, api_url):
 async def print_current_cookies(context, label):
     try:
         cookies = await context.cookies()
-        print(f"[*] [COOKIES] {label}: {len(cookies)} cookies in context", file=sys.stderr, flush=True)
+        print(f"[*] [COOKIES] {label} (context ID: {id(context)}): {len(cookies)} cookies in context", file=sys.stderr, flush=True)
         for c in cookies:
             expires = c.get('expires', 'Session')
             print(f"    -> {c['name']} = {c['value'][:30]}... | domain={c.get('domain')} | path={c.get('path')} | expires={expires} | secure={c.get('secure')} | httpOnly={c.get('httpOnly')}", file=sys.stderr, flush=True)
@@ -261,7 +261,9 @@ async def grab_cookies(
     req_rc = rc_number or DEFAULT_RC_NUMBER
     req_mail_api = temp_mail_api or DEFAULT_TEMP_MAIL_API
 
+    import datetime
     print(f"[*] grab_cookies invoked with mobile={req_mobile}, rc={req_rc}, api={req_mail_api}", file=sys.stderr, flush=True)
+    print(f"[*] Container System Time: {datetime.datetime.now(datetime.timezone.utc)}", file=sys.stderr, flush=True)
 
     if not req_mobile or not req_rc or not req_mail_api:
         raise HTTPException(
@@ -281,6 +283,7 @@ async def grab_cookies(
                 launch_args = {
                     "headless": True,
                     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                    "ignore_https_errors": True,
                     "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
                 }
                 if use_proxy and PROXIES:
@@ -349,13 +352,13 @@ async def grab_cookies(
                     await page.wait_for_timeout(3000)
 
                 print(f"[*] On page: {page.url}", file=sys.stderr, flush=True)
-                await print_current_cookies(context, "After arriving on RC page")
+                await print_current_cookies(page.context, "After arriving on RC page")
 
                 # Step 3: Capture VALID cookies NOW (before any AJAX calls that could invalidate them)
-                pre_click_cookies = await context.cookies([TARGET_URL_BASE])
+                pre_click_cookies = await page.context.cookies([TARGET_URL_BASE])
                 if not pre_click_cookies:
-                    print("[*] context.cookies(TARGET_URL_BASE) returned nothing, fetching all cookies...", file=sys.stderr, flush=True)
-                    pre_click_cookies = await context.cookies()
+                    print("[*] page.context.cookies(TARGET_URL_BASE) returned nothing, fetching all cookies...", file=sys.stderr, flush=True)
+                    pre_click_cookies = await page.context.cookies()
                 print(f"[*] Pre-click cookies: {len(pre_click_cookies)} found", file=sys.stderr, flush=True)
                 for c in pre_click_cookies:
                     print(f"    -> {c['name']} = {c['value'][:40]}...", file=sys.stderr, flush=True)
