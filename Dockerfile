@@ -28,7 +28,7 @@ RUN playwright install chromium
 COPY . .
 
 # Expose FastAPI's default or custom port
-EXPOSE 5000
+EXPOSE 5005
 
-# Start Uvicorn FastAPI server on port 5000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
+# Start Uvicorn FastAPI server on port 5005
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5005"]
