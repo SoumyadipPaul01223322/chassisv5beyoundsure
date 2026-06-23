@@ -75,9 +75,34 @@ async def login_flow(page, session, mobile, api_url):
     await page.keyboard.type(mobile, delay=100)
     await page.wait_for_timeout(1000)
     
+    # Verify input value
+    typed_val = await mobile_input.input_value()
+    print(f"[*] [DEBUG] Mobile input value after typing: '{typed_val}'", file=sys.stderr, flush=True)
+
+    # Check button status
+    btn = page.locator("#send-mobile-number")
+    btn_visible = await btn.is_visible()
+    btn_enabled = await btn.is_enabled()
+    print(f"[*] [DEBUG] Continue button: visible={btn_visible}, enabled={btn_enabled}", file=sys.stderr, flush=True)
+
+    # Save screenshot right before click
+    try:
+        await page.screenshot(path=os.path.join(USER_DATA_DIR, "login_typed.png"))
+        print("[*] [DEBUG] Saved screenshot 'login_typed.png'", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[*] [DEBUG] Failed to save login_typed.png: {e}", file=sys.stderr, flush=True)
+
     # Request code
     print("[*] Requesting OTP code...", file=sys.stderr, flush=True)
-    await page.locator("#send-mobile-number").click()
+    await btn.click()
+    await page.wait_for_timeout(3000)
+
+    # Save screenshot right after click
+    try:
+        await page.screenshot(path=os.path.join(USER_DATA_DIR, "login_clicked.png"))
+        print("[*] [DEBUG] Saved screenshot 'login_clicked.png'", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[*] [DEBUG] Failed to save login_clicked.png: {e}", file=sys.stderr, flush=True)
 
     print("[*] Fetching initial emails to establish baseline...", file=sys.stderr, flush=True)
     existing_msgs = await get_messages(session, api_url)
