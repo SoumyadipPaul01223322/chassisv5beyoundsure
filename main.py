@@ -275,6 +275,7 @@ async def grab_cookies(
 
     async with aiohttp.ClientSession() as session:
         async with async_playwright() as p:
+            browser = None
             context = None
             page = None
             console_logs = []
@@ -282,8 +283,6 @@ async def grab_cookies(
                 use_proxy = os.getenv("USE_PROXY", "false").lower() == "true"
                 launch_args = {
                     "headless": True,
-                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                    "ignore_https_errors": True,
                     "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
                 }
                 if use_proxy and PROXIES:
@@ -293,9 +292,10 @@ async def grab_cookies(
                 else:
                     print("[*] Launching browser WITHOUT proxy", file=sys.stderr, flush=True)
 
-                context = await p.chromium.launch_persistent_context(
-                    USER_DATA_DIR,
-                    **launch_args
+                browser = await p.chromium.launch(**launch_args)
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                    ignore_https_errors=True
                 )
                 
                 page = context.pages[0] if context.pages else await context.new_page()
@@ -451,6 +451,8 @@ async def grab_cookies(
                     print(f"[*] Failed to save cookies manually: {e}", file=sys.stderr, flush=True)
 
                 await context.close()
+                if browser:
+                    await browser.close()
 
                 if captured_request.get("headers"):
                     headers = dict(captured_request["headers"])
@@ -556,6 +558,11 @@ async def grab_cookies(
                 if context:
                     try:
                         await context.close()
+                    except:
+                        pass
+                if browser:
+                    try:
+                        await browser.close()
                     except:
                         pass
                 
