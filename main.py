@@ -153,6 +153,19 @@ async def grab_cookies(
                 
                 page = context.pages[0] if context.pages else await context.new_page()
 
+                # Load manually saved cookies to bypass browser-session cookie deletion
+                cookies_file = os.path.join(USER_DATA_DIR, "cookies.json")
+                if os.path.exists(cookies_file):
+                    try:
+                        import json
+                        with open(cookies_file, "r") as f:
+                            saved_cookies = json.load(f)
+                        if saved_cookies:
+                            await context.add_cookies(saved_cookies)
+                            print(f"[*] Injected {len(saved_cookies)} manually saved cookies from disk.", file=sys.stderr, flush=True)
+                    except Exception as e:
+                        print(f"[*] Failed to load manually saved cookies: {e}", file=sys.stderr, flush=True)
+
                 # Step 1: Go DIRECTLY to RC page (skip dashboard check for speed)
                 print("[*] Navigating directly to RC page...", file=sys.stderr, flush=True)
                 await page.goto(RC_PAGE_URL, timeout=30000, wait_until="networkidle")
@@ -255,6 +268,17 @@ async def grab_cookies(
                         await context.add_cookies([c])
                 else:
                     print(f"[*] Vahan response was {response_status}. Keeping latest rotated cookies to maintain session.", file=sys.stderr, flush=True)
+
+                # Save all current cookies manually to disk to bypass browser-session deletion
+                try:
+                    import json
+                    all_cookies = await context.cookies()
+                    os.makedirs(USER_DATA_DIR, exist_ok=True)
+                    with open(cookies_file, "w") as f:
+                        json.dump(all_cookies, f)
+                    print(f"[*] Successfully saved {len(all_cookies)} cookies to cookies.json", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[*] Failed to save cookies manually: {e}", file=sys.stderr, flush=True)
 
                 await context.close()
 
