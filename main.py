@@ -77,20 +77,37 @@ async def is_logged_in(page):
 
 async def login_flow(page, session, mobile, api_url):
     await print_current_cookies(page.context, "Start of login_flow (before clear)")
-    # Clear all cookies to ensure no stale CSRF tokens / 419 Page Expired errors
-    print("[*] Clearing context cookies to start a fresh login session...", file=sys.stderr, flush=True)
-    await page.context.clear_cookies()
+    
+    # DON'T clear all cookies - keep existing valid session cookies
+    # Just remove any stale Laravel session cookies that might cause 419
+    print("[*] Removing only stale Laravel cookies while keeping existing session...", file=sys.stderr, flush=True)
+    existing_cookies = await page.context.cookies()
+    for c in existing_cookies:
+        if c['name'] in ('XSRF-TOKEN', 'bimasuraksha_session', 'laravel_session'):
+            try:
+                await page.context.clear_cookies()
+                print("[*] Cleared stale session cookies", file=sys.stderr, flush=True)
+                break
+            except:
+                pass
+    
     await print_current_cookies(page.context, "Start of login_flow (after clear)")
 
     print(f"[*] Navigating to {TARGET_URL_BASE}/login...", file=sys.stderr, flush=True)
-    await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000)
+    await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000, wait_until="networkidle")
     await page.wait_for_timeout(3000)
+    
+    # Save screenshot of the login page for debugging
+    try:
+        await page.screenshot(path=os.path.join(USER_DATA_DIR, "login_page.png"))
+    except:
+        pass
 
-    # Click mobile input and type number (target the specific input#mobile-number selector)
+    # Click mobile input and type number
     print(f"[*] Typing mobile number: {mobile}...", file=sys.stderr, flush=True)
-    mobile_input = page.locator("input#mobile-number, input:visible").first
+    mobile_input = page.locator("input#mobile-number, input[placeholder*='mobile'], input[placeholder*='phone'], input[placeholder*='Mobile'], input[type='tel'], input:visible").first
     await mobile_input.click()
-    await mobile_input.fill("") # Clear input first
+    await mobile_input.fill("")
     await page.keyboard.type(mobile, delay=100)
     await page.wait_for_timeout(1000)
     
@@ -99,29 +116,52 @@ async def login_flow(page, session, mobile, api_url):
     print(f"[*] [DEBUG] Mobile input value after typing: '{typed_val}'", file=sys.stderr, flush=True)
 
     # Check button status
-    btn = page.locator("#send-mobile-number")
+    btn = page.locator("#send-mobile-number, button:has-text('Continue'), button:has-text('Send'), button:has-text('Get OTP'), button.btn-success")
     btn_visible = await btn.is_visible()
     btn_enabled = await btn.is_enabled()
     print(f"[*] [DEBUG] Continue button: visible={btn_visible}, enabled={btn_enabled}", file=sys.stderr, flush=True)
 
-    # Save screenshot right before click
-    try:
-        await page.screenshot(path=os.path.join(USER_DATA_DIR, "login_typed.png"))
-        print("[*] [DEBUG] Saved screenshot 'login_typed.png'", file=sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[*] [DEBUG] Failed to save login_typed.png: {e}", file=sys.stderr, flush=True)
-
     # Request code
     print("[*] Requesting OTP code...", file=sys.stderr, flush=True)
+    
+    # Listen for response to check if it 419s
+    response_future = asyncio.get_event_loop().create_future()
+    
+    async def check_otp_response(response):
+        if response.url.endswith('/login') and response.status == 419:
+            response_future.set_result(True)
+    
+    page.on("response", check_otp_response)
+    
     await btn.click()
     await page.wait_for_timeout(3000)
-
-    # Save screenshot right after click
+    
+    # Check if we got a 419
+    if not response_future.done():
+        response_future.set_result(False)
+    
+    got_419 = await response_future
+    if got_419:
+        print("[!] Got 419 CSRF mismatch! Refreshing page and retrying...", file=sys.stderr, flush=True)
+        await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000, wait_until="networkidle")
+        await page.wait_for_timeout(3000)
+        
+        # Retry typing
+        mobile_input = page.locator("input#mobile-number, input[placeholder*='mobile'], input[type='tel'], input:visible").first
+        await mobile_input.click()
+        await mobile_input.fill("")
+        await page.keyboard.type(mobile, delay=100)
+        await page.wait_for_timeout(1000)
+        
+        btn = page.locator("#send-mobile-number, button:has-text('Continue'), button:has-text('Send'), button:has-text('Get OTP'), button.btn-success")
+        await btn.click()
+        await page.wait_for_timeout(3000)
+    
+    # Save screenshot after clicking
     try:
         await page.screenshot(path=os.path.join(USER_DATA_DIR, "login_clicked.png"))
-        print("[*] [DEBUG] Saved screenshot 'login_clicked.png'", file=sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[*] [DEBUG] Failed to save login_clicked.png: {e}", file=sys.stderr, flush=True)
+    except:
+        pass
 
     print("[*] Fetching initial emails to establish baseline...", file=sys.stderr, flush=True)
     existing_msgs = await get_messages(session, api_url)
@@ -144,33 +184,62 @@ async def login_flow(page, session, mobile, api_url):
             screenshot_path = os.path.join(USER_DATA_DIR, "login_timeout_error.png")
             await page.screenshot(path=screenshot_path)
             print(f"[*] Saved login timeout screenshot to {screenshot_path}", file=sys.stderr, flush=True)
-            
-            # Print any visible alert/error text on the page
-            text_content = await page.evaluate("() => document.body.innerText")
-            print("[*] Scanning login page text for error messages...", file=sys.stderr, flush=True)
-            for line in text_content.split('\n'):
-                line = line.strip()
-                if line and any(keyword in line.lower() for keyword in ["error", "invalid", "not found", "failed", "required", "wrong", "not register", "denied", "please"]):
-                    print(f"    -> [ALERT MESSAGE] {line}", file=sys.stderr, flush=True)
-        except Exception as e:
-            print(f"[*] Failed to log timeout diagnostic info: {e}", file=sys.stderr, flush=True)
+        except:
+            pass
         return False
 
-    await page.wait_for_timeout(3000)
-    otp_inputs = page.locator("input:visible")
-    
+    # Fill OTP
     print("[*] Filling OTP into inputs...", file=sys.stderr, flush=True)
-    for i in range(6):
-        await otp_inputs.nth(i).fill(otp[i])
-
-    # Wait for auto-login redirect process to complete
-    print("[*] Waiting for auto login redirect...", file=sys.stderr, flush=True)
-    await page.wait_for_timeout(8000)
+    await page.wait_for_timeout(2000)
     
-    # Confirm login succeeded: page should no longer be on /login
+    # Try finding OTP container first
+    otp_filled = False
+    try:
+        otp_container = page.locator(".otp-input, .otp-box, .digit-group, [class*='otp'] input, input[maxlength='1']").first
+        if await otp_container.is_visible():
+            all_digit_inputs = page.locator("input[maxlength='1'], input.otp-input, input.form-control[type='tel']")
+            count = await all_digit_inputs.count()
+            if count >= 6:
+                for i in range(6):
+                    await all_digit_inputs.nth(i).fill(otp[i])
+                otp_filled = True
+                print(f"[*] Filled {count} OTP digit inputs")
+    except:
+        pass
+    
+    if not otp_filled:
+        # Fallback: keyboard type
+        print("[*] Using keyboard fallback for OTP...")
+        try:
+            first_input = page.locator("input:visible").first
+            await first_input.click()
+            await first_input.fill("")
+            await page.keyboard.type(otp, delay=100)
+        except Exception as e:
+            print(f"[*] Keyboard fallback failed: {e}")
+            # Last resort: try filling all visible inputs sequentially
+            all_vis = page.locator("input:visible")
+            cnt = await all_vis.count()
+            for i in range(min(cnt, 6)):
+                try:
+                    await all_vis.nth(i).fill(otp[i])
+                except:
+                    pass
+
+    # Wait for auto-login
+    print("[*] Waiting for auto login redirect...", file=sys.stderr, flush=True)
+    await page.wait_for_timeout(10000)
+    
     current_url = page.url
     print(f"[*] Post-login URL: {current_url}", file=sys.stderr, flush=True)
     await print_current_cookies(page.context, "Post-login redirect completed")
+    
+    # Save debug screenshot
+    try:
+        await page.screenshot(path=os.path.join(USER_DATA_DIR, "after_login.png"))
+    except:
+        pass
+    
     return "login" not in current_url
 
 @app.get("/")
