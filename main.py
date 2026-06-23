@@ -272,6 +272,8 @@ async def grab_cookies(
     async with aiohttp.ClientSession() as session:
         async with async_playwright() as p:
             context = None
+            page = None
+            console_logs = []
             try:
                 selected_proxy = random.choice(PROXIES)
                 print(f"[*] Launching browser with proxy: {selected_proxy['server']}", file=sys.stderr, flush=True)
@@ -287,7 +289,18 @@ async def grab_cookies(
                 page = context.pages[0] if context.pages else await context.new_page()
 
                 # Pipe browser console messages to container output for visibility into client errors
-                page.on("console", lambda msg: print(f"[BROWSER CONSOLE] {msg.type}: {msg.text}", file=sys.stderr, flush=True))
+                def handle_console(msg):
+                    log_line = f"[{msg.type}] {msg.text}"
+                    console_logs.append(log_line)
+                    print(f"[BROWSER CONSOLE] {log_line}", file=sys.stderr, flush=True)
+                page.on("console", handle_console)
+
+                async def handle_http_error(response):
+                    if response.status >= 400:
+                        log_line = f"[HTTP {response.status}] {response.url}"
+                        console_logs.append(log_line)
+                        print(log_line, file=sys.stderr, flush=True)
+                page.on("response", handle_http_error)
 
                 # Load manually saved cookies to bypass browser-session cookie deletion
                 cookies_file = os.path.join(USER_DATA_DIR, "cookies.json")
@@ -507,14 +520,34 @@ async def grab_cookies(
                 print("[ERROR] Internal error captured in Grab pipeline:", file=sys.stderr)
                 traceback.print_exc()
 
+                err_msg = str(err)
+                tb_msg = traceback.format_exc()
+                page_url = ""
+                page_text = ""
+                
+                if page:
+                    try:
+                        page_url = page.url
+                        page_text = await page.evaluate("() => document.body.innerText")
+                    except Exception as diag_err:
+                        print(f"[*] Failed to gather page diagnostics: {diag_err}", file=sys.stderr)
+
                 if context:
                     try:
                         await context.close()
                     except:
                         pass
                 
-                raise HTTPException(
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
                     status_code=500,
-                    detail="An error occurred while executing the automation sequence. Please consult system logs."
+                    content={
+                        "success": False,
+                        "error": err_msg,
+                        "traceback": tb_msg,
+                        "current_url": page_url,
+                        "page_text": page_text,
+                        "console_logs": console_logs
+                    }
                 )
 
