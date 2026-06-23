@@ -504,15 +504,14 @@ async def grab_cookies(
 
                     return {
                         "success": True,
-                        "raw_request_header": raw_header,
-                        "method": method,
-                        "url": url,
-                        "headers": headers,
-                        "post_data": post_data,
                         "cookie": cookie_str,
-                        "details": {
-                            "XSRF-TOKEN": xsrf_val,
-                            "bimasuraksha_session": session_val
+                        "headers": {
+                            "Host": headers.get("host") or headers.get("Host") or "www.insurance.beyondsure.in",
+                            "Origin": headers.get("origin") or headers.get("Origin") or "https://www.insurance.beyondsure.in",
+                            "Referer": headers.get("referer") or headers.get("Referer") or RC_PAGE_URL,
+                            "User-Agent": headers.get("user-agent") or headers.get("User-Agent") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                            "Cookie": cookie_str,
+                            "X-XSRF-TOKEN": unquote(xsrf_val) if xsrf_val else ""
                         }
                     }
                 else:
