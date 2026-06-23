@@ -234,13 +234,15 @@ async def grab_cookies(
                 except asyncio.TimeoutError:
                     print("[*] Vahan response timed out, continuing...", file=sys.stderr, flush=True)
 
-                # Step 6: RESTORE pre-click cookies to preserve valid session for next request
-                # The 401 response may have rotated/invalidated session cookies on the server.
-                # By restoring the pre-click cookies, the persistent context saves valid ones.
-                await context.clear_cookies()
-                for c in pre_click_cookies:
-                    await context.add_cookies([c])
-                print("[*] Restored pre-click cookies to preserve session", file=sys.stderr, flush=True)
+                # Step 6: RESTORE pre-click cookies ONLY if the response was a 401
+                response_status = captured_request.get("response_status")
+                if response_status == 401:
+                    print("[*] Vahan response was 401. Restoring pre-click cookies to protect session.", file=sys.stderr, flush=True)
+                    await context.clear_cookies()
+                    for c in pre_click_cookies:
+                        await context.add_cookies([c])
+                else:
+                    print(f"[*] Vahan response was {response_status}. Keeping latest rotated cookies to maintain session.", file=sys.stderr, flush=True)
 
                 await context.close()
 
