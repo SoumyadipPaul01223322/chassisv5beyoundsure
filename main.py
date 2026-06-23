@@ -86,11 +86,13 @@ async def login_flow(page, session, mobile, api_url):
         await otp_inputs.nth(i).fill(otp[i])
 
     # Wait for auto-login redirect process to complete
-    print("[*] Waiting for auto login redirect...")
+    print("[*] Waiting for auto login redirect...", flush=True)
     await page.wait_for_timeout(8000)
     
-    # Confirm redirected to dashboard
-    return "dashboard" in page.url
+    # Confirm login succeeded: page should no longer be on /login
+    current_url = page.url
+    print(f"[*] Post-login URL: {current_url}", file=sys.stderr, flush=True)
+    return "login" not in current_url
 
 @app.get("/")
 async def index():
