@@ -102,7 +102,9 @@ async def grab_cookies(
     rc_number: str = Query(None, description="Vehicle registration number (optional, fallback to env)"),
     temp_mail_api: str = Query(None, description="Temp mail messages URL (optional, fallback to env)")
 ):
-    # Resolve parameter values, prioritizing request query arguments, then system environment variables
+    from urllib.parse import urlparse, unquote
+
+    # Resolve parameter values
     req_mobile = mobile or DEFAULT_MOBILE
     req_rc = rc_number or DEFAULT_RC_NUMBER
     req_mail_api = temp_mail_api or DEFAULT_TEMP_MAIL_API
@@ -113,11 +115,12 @@ async def grab_cookies(
             detail="Missing configuration. Parameters must be passed via query string or environment variables."
         )
 
+    RC_PAGE_URL = f"{TARGET_URL_BASE}/leads/create/online?insurance_category_id=2&product_category=motor&product_type_id=3&policy_type_id=1&lead_flow=1"
+
     async with aiohttp.ClientSession() as session:
         async with async_playwright() as p:
             context = None
             try:
-                # Launch Chromium headlessly with sandbox disabled for Docker compatibility
                 context = await p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
@@ -126,40 +129,59 @@ async def grab_cookies(
                 
                 page = context.pages[0] if context.pages else await context.new_page()
 
-                # Step 1: Check login status
-                if not await is_logged_in(page):
+                # Step 1: Go DIRECTLY to RC page (skip dashboard check for speed)
+                print("[*] Navigating directly to RC page...", file=sys.stderr)
+                await page.goto(RC_PAGE_URL, timeout=30000)
+                await page.wait_for_timeout(3000)
+
+                # Step 2: If redirected to login page, perform login then come back
+                if "login" in page.url:
+                    print("[*] Session expired — performing login...", file=sys.stderr)
                     success = await login_flow(page, session, req_mobile, req_mail_api)
                     if not success:
                         raise Exception("Verification flow incomplete or invalid OTP.")
+                    # After login, navigate back to RC page
+                    await page.goto(RC_PAGE_URL, timeout=30000)
+                    await page.wait_for_timeout(3000)
 
-                # Step 2: Open RC retrieval page
-                await page.goto(
-                    f"{TARGET_URL_BASE}/leads/create/online?insurance_category_id=2&product_category=motor&product_type_id=3&policy_type_id=1&lead_flow=1",
-                    timeout=30000
-                )
-                await page.wait_for_timeout(5000)
+                print(f"[*] On page: {page.url}", file=sys.stderr)
 
-                # Step 3: Set up network request interception to capture the Vahan service call
+                # Step 3: Set up network interception for the Vahan service call
                 captured_request = {}
+                vahan_response_event = asyncio.Event()
 
                 async def handle_request(request):
                     if "get_vahan_service" in request.url:
-                        print(f"[*] Captured request to: {request.url}", file=sys.stderr)
+                        print(f"[*] Intercepted request: {request.method} {request.url}", file=sys.stderr)
                         captured_request["url"] = request.url
                         captured_request["method"] = request.method
                         captured_request["headers"] = dict(request.headers)
                         captured_request["post_data"] = request.post_data
 
-                page.on("request", handle_request)
+                async def handle_response(response):
+                    if "get_vahan_service" in response.url:
+                        print(f"[*] Got response: {response.status} from {response.url}", file=sys.stderr)
+                        captured_request["response_status"] = response.status
+                        vahan_response_event.set()
 
-                # Step 4: Input vehicle registration & click get Vahan data
+                page.on("request", handle_request)
+                page.on("response", handle_response)
+
+                # Step 4: Input RC number and click get Vahan data
                 await page.fill("#vehicle_registration_number", req_rc)
                 await page.click("#get_vahan_data")
 
-                # Wait for the XHR request to fire and complete
-                await page.wait_for_timeout(10000)
+                # Wait for the Vahan response (max 15 seconds)
+                try:
+                    await asyncio.wait_for(vahan_response_event.wait(), timeout=15)
+                    print("[*] Vahan response received!", file=sys.stderr)
+                except asyncio.TimeoutError:
+                    print("[*] Vahan response timed out, continuing with captured data...", file=sys.stderr)
 
-                # Step 5: Also extract cookies from browser context
+                # Brief wait for cookies to settle after response
+                await page.wait_for_timeout(1000)
+
+                # Step 5: Grab FRESH cookies AFTER the response (these are the valid, rotated ones)
                 cookies = await context.cookies()
                 xsrf = next((c["value"] for c in cookies if c["name"] == "XSRF-TOKEN"), None)
                 session_cookie = next((c["value"] for c in cookies if c["name"] == "bimasuraksha_session"), None)
@@ -167,25 +189,21 @@ async def grab_cookies(
                 await context.close()
 
                 if captured_request.get("headers"):
-                    # Build the full raw HTTP request header string
                     headers = dict(captured_request["headers"])
                     method = captured_request.get("method", "POST")
                     url = captured_request.get("url", "")
                     post_data = captured_request.get("post_data", "")
                     
-                    # Playwright CDP doesn't include cookies in request.headers
-                    # We must build the Cookie header from context.cookies()
+                    # Use FRESH post-response cookies (not the stale ones from the request)
                     cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
                     if cookie_str:
                         headers["cookie"] = cookie_str
 
-                    # Laravel requires X-XSRF-TOKEN header (URL-decoded XSRF cookie value)
+                    # Laravel X-XSRF-TOKEN from FRESH cookies
                     if xsrf:
-                        from urllib.parse import unquote
                         headers["x-xsrf-token"] = unquote(xsrf)
 
-                    # Add Host and Origin if missing
-                    from urllib.parse import urlparse
+                    # Add Host and Origin
                     parsed = urlparse(url)
                     host = parsed.netloc
                     if "host" not in headers:
@@ -217,7 +235,6 @@ async def grab_cookies(
                         }
                     }
                 elif xsrf and session_cookie:
-                    # Fallback: no XHR was intercepted but cookies exist
                     return {
                         "success": True,
                         "cookie": f"XSRF-TOKEN={xsrf}; bimasuraksha_session={session_cookie}",
@@ -234,7 +251,6 @@ async def grab_cookies(
                     }
 
             except Exception as err:
-                # Print exception trace to standard error for Docker dashboard logs (hidden from client)
                 print("[ERROR] Internal error captured in Grab pipeline:", file=sys.stderr)
                 traceback.print_exc()
 
@@ -244,7 +260,6 @@ async def grab_cookies(
                     except:
                         pass
                 
-                # Expose a generic, sanitized response to prevent leaking endpoints or internal codes
                 raise HTTPException(
                     status_code=500,
                     detail="An error occurred while executing the automation sequence. Please consult system logs."
