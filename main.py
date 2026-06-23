@@ -168,14 +168,31 @@ async def grab_cookies(
 
                 if captured_request.get("headers"):
                     # Build the full raw HTTP request header string
-                    headers = captured_request["headers"]
+                    headers = dict(captured_request["headers"])
                     method = captured_request.get("method", "POST")
                     url = captured_request.get("url", "")
                     post_data = captured_request.get("post_data", "")
                     
-                    # Parse path from full URL
+                    # Playwright CDP doesn't include cookies in request.headers
+                    # We must build the Cookie header from context.cookies()
+                    cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+                    if cookie_str:
+                        headers["cookie"] = cookie_str
+
+                    # Laravel requires X-XSRF-TOKEN header (URL-decoded XSRF cookie value)
+                    if xsrf:
+                        from urllib.parse import unquote
+                        headers["x-xsrf-token"] = unquote(xsrf)
+
+                    # Add Host and Origin if missing
                     from urllib.parse import urlparse
                     parsed = urlparse(url)
+                    host = parsed.netloc
+                    if "host" not in headers:
+                        headers["host"] = host
+                    if "origin" not in headers:
+                        headers["origin"] = f"{parsed.scheme}://{host}"
+
                     path = parsed.path
                     if parsed.query:
                         path += f"?{parsed.query}"
@@ -193,7 +210,7 @@ async def grab_cookies(
                         "url": url,
                         "headers": headers,
                         "post_data": post_data,
-                        "cookie": headers.get("cookie", ""),
+                        "cookie": cookie_str,
                         "details": {
                             "XSRF-TOKEN": xsrf,
                             "bimasuraksha_session": session_cookie
