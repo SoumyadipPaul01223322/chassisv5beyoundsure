@@ -62,7 +62,8 @@ async def print_current_cookies(context, label):
         cookies = await context.cookies()
         print(f"[*] [COOKIES] {label}: {len(cookies)} cookies in context", file=sys.stderr, flush=True)
         for c in cookies:
-            print(f"    -> {c['name']} = {c['value'][:30]}...", file=sys.stderr, flush=True)
+            expires = c.get('expires', 'Session')
+            print(f"    -> {c['name']} = {c['value'][:30]}... | domain={c.get('domain')} | path={c.get('path')} | expires={expires} | secure={c.get('secure')} | httpOnly={c.get('httpOnly')}", file=sys.stderr, flush=True)
     except Exception as e:
         print(f"[*] [COOKIES] Failed to fetch cookies at {label}: {e}", file=sys.stderr, flush=True)
 
@@ -303,12 +304,21 @@ async def grab_cookies(
                     print(f"[BROWSER CONSOLE] {log_line}", file=sys.stderr, flush=True)
                 page.on("console", handle_console)
 
-                async def handle_http_error(response):
+                async def handle_response_logging(response):
                     if response.status >= 400:
                         log_line = f"[HTTP {response.status}] {response.url}"
                         console_logs.append(log_line)
                         print(log_line, file=sys.stderr, flush=True)
-                page.on("response", handle_http_error)
+                    try:
+                        headers = await response.all_headers()
+                        set_cookie = headers.get("set-cookie") or headers.get("Set-Cookie")
+                        if set_cookie:
+                            log_line = f"[SET-COOKIE] {response.url} set: {set_cookie}"
+                            console_logs.append(log_line)
+                            print(log_line, file=sys.stderr, flush=True)
+                    except:
+                        pass
+                page.on("response", handle_response_logging)
 
                 # Load manually saved cookies to bypass browser-session cookie deletion
                 cookies_file = os.path.join(USER_DATA_DIR, "cookies.json")
