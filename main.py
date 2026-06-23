@@ -88,6 +88,10 @@ async def login_flow(page, session, mobile, api_url):
     await page.wait_for_timeout(5000)
     return True
 
+@app.get("/")
+async def index():
+    return {"status": "active", "service": "chassis-grabber-v5"}
+
 @app.get("/grab")
 async def grab_cookies(
     mobile: str = Query(None, description="Mobile number (optional, fallback to env)"),
