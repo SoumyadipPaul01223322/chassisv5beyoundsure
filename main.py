@@ -193,6 +193,7 @@ async def grab_cookies(
                 context = await p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
                     args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
                 )
                 
