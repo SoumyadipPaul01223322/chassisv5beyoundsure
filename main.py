@@ -78,23 +78,24 @@ async def is_logged_in(page):
 async def login_flow(page, session, mobile, api_url):
     await print_current_cookies(page.context, "Start of login_flow (before clear)")
     
-    # DON'T clear all cookies - keep existing valid session cookies
-    # Just remove any stale Laravel session cookies that might cause 419
-    print("[*] Removing only stale Laravel cookies while keeping existing session...", file=sys.stderr, flush=True)
-    existing_cookies = await page.context.cookies()
-    for c in existing_cookies:
-        if c['name'] in ('XSRF-TOKEN', 'bimasuraksha_session', 'laravel_session'):
-            try:
-                await page.context.clear_cookies()
-                print("[*] Cleared stale session cookies", file=sys.stderr, flush=True)
-                break
-            except:
-                pass
+    # Clear cookies, localStorage, and sessionStorage to ensure a 100% clean session start.
+    print("[*] Performing clean session reset (cookies, localStorage, sessionStorage)...", file=sys.stderr, flush=True)
+    try:
+        await page.context.clear_cookies()
+        # Go to login page first so we are on the correct origin to clear localStorage/sessionStorage
+        await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000, wait_until="networkidle")
+        await page.evaluate("() => { localStorage.clear(); sessionStorage.clear(); }")
+        # Reload the page to load it with a completely clean context
+        await page.reload(wait_until="networkidle")
+    except Exception as reset_err:
+        print(f"[!] Warning during session reset: {reset_err}", file=sys.stderr, flush=True)
+        # Fallback reload
+        try:
+            await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000, wait_until="networkidle")
+        except:
+            pass
     
-    await print_current_cookies(page.context, "Start of login_flow (after clear)")
-
-    print(f"[*] Navigating to {TARGET_URL_BASE}/login...", file=sys.stderr, flush=True)
-    await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000, wait_until="networkidle")
+    await print_current_cookies(page.context, "Start of login_flow (after clean reset)")
     await page.wait_for_timeout(3000)
     
     # Save screenshot of the login page for debugging
@@ -275,15 +276,22 @@ async def grab_cookies(
             page = None
             console_logs = []
             try:
-                selected_proxy = random.choice(PROXIES)
-                print(f"[*] Launching browser with proxy: {selected_proxy['server']}", file=sys.stderr, flush=True)
-                
+                use_proxy = os.getenv("USE_PROXY", "false").lower() == "true"
+                launch_args = {
+                    "headless": True,
+                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                    "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                }
+                if use_proxy and PROXIES:
+                    selected_proxy = random.choice(PROXIES)
+                    launch_args["proxy"] = selected_proxy
+                    print(f"[*] Launching browser with proxy: {selected_proxy['server']}", file=sys.stderr, flush=True)
+                else:
+                    print("[*] Launching browser WITHOUT proxy", file=sys.stderr, flush=True)
+
                 context = await p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
-                    headless=True,
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                    proxy=selected_proxy,
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                    **launch_args
                 )
                 
                 page = context.pages[0] if context.pages else await context.new_page()
