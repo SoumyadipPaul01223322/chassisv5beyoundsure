@@ -510,7 +510,6 @@ async def grab_cookies(
                             "Origin": headers.get("origin") or headers.get("Origin") or "https://www.insurance.beyondsure.in",
                             "Referer": headers.get("referer") or headers.get("Referer") or RC_PAGE_URL,
                             "User-Agent": headers.get("user-agent") or headers.get("User-Agent") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                            "Cookie": cookie_str,
                             "X-XSRF-TOKEN": unquote(xsrf_val) if xsrf_val else ""
                         }
                     }
