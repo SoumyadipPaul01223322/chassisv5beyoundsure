@@ -139,26 +139,76 @@ async def grab_cookies(
                 )
                 await page.wait_for_timeout(5000)
 
-                # Step 3: Input vehicle registration & fetch Vahan data
+                # Step 3: Set up network request interception to capture the Vahan service call
+                captured_request = {}
+
+                async def handle_request(request):
+                    if "get_vahan_service" in request.url:
+                        print(f"[*] Captured request to: {request.url}", file=sys.stderr)
+                        captured_request["url"] = request.url
+                        captured_request["method"] = request.method
+                        captured_request["headers"] = dict(request.headers)
+                        captured_request["post_data"] = request.post_data
+
+                page.on("request", handle_request)
+
+                # Step 4: Input vehicle registration & click get Vahan data
                 await page.fill("#vehicle_registration_number", req_rc)
                 await page.click("#get_vahan_data")
+
+                # Wait for the XHR request to fire and complete
                 await page.wait_for_timeout(10000)
 
-                # Step 4: Extract relevant cookies
+                # Step 5: Also extract cookies from browser context
                 cookies = await context.cookies()
                 xsrf = next((c["value"] for c in cookies if c["name"] == "XSRF-TOKEN"), None)
                 session_cookie = next((c["value"] for c in cookies if c["name"] == "bimasuraksha_session"), None)
 
                 await context.close()
 
-                if xsrf and session_cookie:
+                if captured_request.get("headers"):
+                    # Build the full raw HTTP request header string
+                    headers = captured_request["headers"]
+                    method = captured_request.get("method", "POST")
+                    url = captured_request.get("url", "")
+                    post_data = captured_request.get("post_data", "")
+                    
+                    # Parse path from full URL
+                    from urllib.parse import urlparse
+                    parsed = urlparse(url)
+                    path = parsed.path
+                    if parsed.query:
+                        path += f"?{parsed.query}"
+
+                    # Build raw header block
+                    raw_lines = [f"{method} {path} HTTP/1.1"]
+                    for key, value in headers.items():
+                        raw_lines.append(f"{key}: {value}")
+                    raw_header = "\r\n".join(raw_lines)
+
+                    return {
+                        "success": True,
+                        "raw_request_header": raw_header,
+                        "method": method,
+                        "url": url,
+                        "headers": headers,
+                        "post_data": post_data,
+                        "cookie": headers.get("cookie", ""),
+                        "details": {
+                            "XSRF-TOKEN": xsrf,
+                            "bimasuraksha_session": session_cookie
+                        }
+                    }
+                elif xsrf and session_cookie:
+                    # Fallback: no XHR was intercepted but cookies exist
                     return {
                         "success": True,
                         "cookie": f"XSRF-TOKEN={xsrf}; bimasuraksha_session={session_cookie}",
                         "details": {
                             "XSRF-TOKEN": xsrf,
                             "bimasuraksha_session": session_cookie
-                        }
+                        },
+                        "note": "Vahan service request was not intercepted. Returning browser cookies only."
                     }
                 else:
                     return {
@@ -182,3 +232,4 @@ async def grab_cookies(
                     status_code=500,
                     detail="An error occurred while executing the automation sequence. Please consult system logs."
                 )
+
