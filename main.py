@@ -6,6 +6,7 @@ import asyncio
 import os
 import sys
 import traceback
+import random
 
 app = FastAPI(
     title="Chassis Cookie Grabber API (v5)",
@@ -13,6 +14,19 @@ app = FastAPI(
 )
 
 USER_DATA_DIR = "./chrome-session"
+
+PROXIES = [
+    {"server": "http://9.142.215.9:6174", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://72.46.138.234:6460", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://82.21.55.145:7409", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://46.202.34.70:7836", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://45.58.229.64:5236", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://82.29.47.181:7905", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://72.1.153.149:5541", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://185.253.122.165:5974", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://192.46.201.254:6768", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"},
+    {"server": "http://216.98.230.63:6516", "username": "xovmkdcfstaticresidential", "password": "2ook6qr067sf"}
+]
 POLL_INTERVAL = 2
 MAX_POLLS = 60
 
@@ -190,10 +204,14 @@ async def grab_cookies(
         async with async_playwright() as p:
             context = None
             try:
+                selected_proxy = random.choice(PROXIES)
+                print(f"[*] Launching browser with proxy: {selected_proxy['server']}", file=sys.stderr, flush=True)
+                
                 context = await p.chromium.launch_persistent_context(
                     USER_DATA_DIR,
                     headless=True,
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                    proxy=selected_proxy,
                     args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
                 )
                 
