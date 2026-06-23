@@ -515,21 +515,8 @@ async def grab_cookies(
                             "bimasuraksha_session": session_val
                         }
                     }
-                elif xsrf and session_cookie:
-                    return {
-                        "success": True,
-                        "cookie": f"XSRF-TOKEN={xsrf}; bimasuraksha_session={session_cookie}",
-                        "details": {
-                            "XSRF-TOKEN": xsrf,
-                            "bimasuraksha_session": session_cookie
-                        },
-                        "note": "Vahan service request was not intercepted. Returning browser cookies only."
-                    }
                 else:
-                    return {
-                        "success": False,
-                        "error": "Grab verification failed: session cookies were missing."
-                    }
+                    raise Exception("Vahan service request was not intercepted (timeout or click failed).")
 
             except Exception as err:
                 print("[ERROR] Internal error captured in Grab pipeline:", file=sys.stderr)
