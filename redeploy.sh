@@ -9,6 +9,7 @@ docker build -t chassis-v5 . && \
 docker run -d \
   --name chassis-v5 \
   --network dokploy-network \
+  -v chassis-v5-session:/app/chrome-session \
   -p 5005:5005 \
   --env-file .env \
   --label traefik.enable=true \
