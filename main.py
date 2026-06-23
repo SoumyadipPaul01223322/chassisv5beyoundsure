@@ -85,8 +85,12 @@ async def login_flow(page, session, mobile, api_url):
     for i in range(6):
         await otp_inputs.nth(i).fill(otp[i])
 
-    await page.wait_for_timeout(5000)
-    return True
+    # Wait for auto-login redirect process to complete
+    print("[*] Waiting for auto login redirect...")
+    await page.wait_for_timeout(8000)
+    
+    # Confirm redirected to dashboard
+    return "dashboard" in page.url
 
 @app.get("/")
 async def index():
@@ -138,7 +142,7 @@ async def grab_cookies(
                 # Step 3: Input vehicle registration & fetch Vahan data
                 await page.fill("#vehicle_registration_number", req_rc)
                 await page.click("#get_vahan_data")
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(10000)
 
                 # Step 4: Extract relevant cookies
                 cookies = await context.cookies()
