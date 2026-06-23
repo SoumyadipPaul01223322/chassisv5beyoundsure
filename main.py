@@ -132,74 +132,37 @@ async def grab_cookies(
                 page = context.pages[0] if context.pages else await context.new_page()
 
                 # Step 1: Go DIRECTLY to RC page (skip dashboard check for speed)
-                print("[*] Navigating directly to RC page...", file=sys.stderr)
-                await page.goto(RC_PAGE_URL, timeout=30000)
-                await page.wait_for_timeout(3000)
+                print("[*] Navigating directly to RC page...", file=sys.stderr, flush=True)
+                await page.goto(RC_PAGE_URL, timeout=30000, wait_until="networkidle")
+                await page.wait_for_timeout(2000)
 
                 # Step 2: If redirected to login page, perform login then come back
                 if "login" in page.url:
-                    print("[*] Session expired — performing login...", file=sys.stderr)
+                    print("[*] Session expired — performing login...", file=sys.stderr, flush=True)
                     success = await login_flow(page, session, req_mobile, req_mail_api)
                     if not success:
                         raise Exception("Verification flow incomplete or invalid OTP.")
-                    # After login, navigate back to RC page
-                    await page.goto(RC_PAGE_URL, timeout=30000)
+                    # After login, navigate to RC page with full load
+                    await page.goto(RC_PAGE_URL, timeout=30000, wait_until="networkidle")
                     await page.wait_for_timeout(3000)
 
-                print(f"[*] On page: {page.url}", file=sys.stderr)
+                print(f"[*] On page: {page.url}", file=sys.stderr, flush=True)
 
-                # Step 3: Set up network interception for the Vahan service call
-                captured_request = {}
-                vahan_response_event = asyncio.Event()
-
-                async def handle_request(request):
-                    if "get_vahan_service" in request.url:
-                        print(f"[*] Intercepted request: {request.method} {request.url}", file=sys.stderr)
-                        captured_request["url"] = request.url
-                        captured_request["method"] = request.method
-                        captured_request["headers"] = dict(request.headers)
-                        captured_request["post_data"] = request.post_data
-
-                async def handle_response(response):
-                    if "get_vahan_service" in response.url:
-                        print(f"[*] Got response: {response.status} from {response.url}", file=sys.stderr)
-                        captured_request["response_status"] = response.status
-                        vahan_response_event.set()
-
-                page.on("request", handle_request)
-                page.on("response", handle_response)
-
-                # Step 4: Input RC number and click get Vahan data
-                await page.fill("#vehicle_registration_number", req_rc)
-                await page.click("#get_vahan_data")
-
-                # Wait for the Vahan response (max 15 seconds)
-                try:
-                    await asyncio.wait_for(vahan_response_event.wait(), timeout=15)
-                    print("[*] Vahan response received!", file=sys.stderr)
-                except asyncio.TimeoutError:
-                    print("[*] Vahan response timed out, continuing with captured data...", file=sys.stderr)
-
-                # Brief wait for cookies to settle after response
-                await page.wait_for_timeout(1000)
-
-                # Step 5: Grab FRESH cookies AFTER the response
-                # Pass the target URL so Playwright returns cookies for that domain
-                cookies = await context.cookies([TARGET_URL_BASE])
-                print(f"[*] Cookies from context.cookies(): {len(cookies)} found", file=sys.stderr, flush=True)
-                for c in cookies:
+                # Step 3: Capture VALID cookies NOW (before any AJAX calls that could invalidate them)
+                pre_click_cookies = await context.cookies([TARGET_URL_BASE])
+                print(f"[*] Pre-click cookies: {len(pre_click_cookies)} found", file=sys.stderr, flush=True)
+                for c in pre_click_cookies:
                     print(f"    -> {c['name']} = {c['value'][:40]}...", file=sys.stderr, flush=True)
 
-                xsrf = next((c["value"] for c in cookies if c["name"] == "XSRF-TOKEN"), None)
-                session_cookie = next((c["value"] for c in cookies if c["name"] == "bimasuraksha_session"), None)
+                xsrf = next((c["value"] for c in pre_click_cookies if c["name"] == "XSRF-TOKEN"), None)
+                session_cookie = next((c["value"] for c in pre_click_cookies if c["name"] == "bimasuraksha_session"), None)
 
-                # Fallback: if context.cookies() didn't return them, try document.cookie via JS
+                # Fallback: try document.cookie if context.cookies() failed
                 if not xsrf or not session_cookie:
                     print("[*] Cookies missing from context, trying document.cookie...", file=sys.stderr, flush=True)
                     try:
                         js_cookies = await page.evaluate("document.cookie")
-                        print(f"[*] document.cookie: {js_cookies[:100]}...", file=sys.stderr, flush=True)
-                        # Parse document.cookie string
+                        print(f"[*] document.cookie: {js_cookies[:120]}...", file=sys.stderr, flush=True)
                         for pair in js_cookies.split(";"):
                             pair = pair.strip()
                             if pair.startswith("XSRF-TOKEN=") and not xsrf:
@@ -209,6 +172,62 @@ async def grab_cookies(
                     except Exception as e:
                         print(f"[*] document.cookie fallback failed: {e}", file=sys.stderr, flush=True)
 
+                # Step 4: Extract enquiry_id and form data from page JS (without clicking)
+                enquiry_id = ""
+                try:
+                    enquiry_id = await page.evaluate("""
+                        () => {
+                            // Try common ways the enquiry_id might be stored
+                            if (typeof enquiry_id !== 'undefined') return enquiry_id;
+                            const el = document.querySelector('#enquiry_id, input[name="enquiry_id"]');
+                            if (el) return el.value;
+                            return '';
+                        }
+                    """)
+                    print(f"[*] Extracted enquiry_id: {enquiry_id}", file=sys.stderr, flush=True)
+                except:
+                    pass
+
+                # Step 5: Set up network interception, fill RC and click to get full request data
+                captured_request = {}
+                vahan_response_event = asyncio.Event()
+
+                async def handle_request(request):
+                    if "get_vahan_service" in request.url:
+                        print(f"[*] Intercepted request: {request.method} {request.url}", file=sys.stderr, flush=True)
+                        captured_request["url"] = request.url
+                        captured_request["method"] = request.method
+                        captured_request["headers"] = dict(request.headers)
+                        captured_request["post_data"] = request.post_data
+
+                async def handle_response(response):
+                    if "get_vahan_service" in response.url:
+                        print(f"[*] Got response: {response.status} from {response.url}", file=sys.stderr, flush=True)
+                        captured_request["response_status"] = response.status
+                        vahan_response_event.set()
+
+                page.on("request", handle_request)
+                page.on("response", handle_response)
+
+                # Fill RC number and click
+                await page.fill("#vehicle_registration_number", req_rc)
+                await page.click("#get_vahan_data")
+
+                # Wait for the Vahan response (max 15 seconds)
+                try:
+                    await asyncio.wait_for(vahan_response_event.wait(), timeout=15)
+                    print("[*] Vahan response received!", file=sys.stderr, flush=True)
+                except asyncio.TimeoutError:
+                    print("[*] Vahan response timed out, continuing...", file=sys.stderr, flush=True)
+
+                # Step 6: RESTORE pre-click cookies to preserve valid session for next request
+                # The 401 response may have rotated/invalidated session cookies on the server.
+                # By restoring the pre-click cookies, the persistent context saves valid ones.
+                await context.clear_cookies()
+                for c in pre_click_cookies:
+                    await context.add_cookies([c])
+                print("[*] Restored pre-click cookies to preserve session", file=sys.stderr, flush=True)
+
                 await context.close()
 
                 if captured_request.get("headers"):
@@ -217,8 +236,8 @@ async def grab_cookies(
                     url = captured_request.get("url", "")
                     post_data = captured_request.get("post_data", "")
                     
-                    # Use FRESH post-response cookies (not the stale ones from the request)
-                    cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+                    # Use pre-click cookies (valid, before the 401 could invalidate them)
+                    cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in pre_click_cookies)
                     if cookie_str:
                         headers["cookie"] = cookie_str
 
