@@ -43,6 +43,15 @@ async def get_latest_otp(session, existing_ids, api_url):
             return match.group(1), msg["id"]
     return None, None
 
+async def print_current_cookies(context, label):
+    try:
+        cookies = await context.cookies()
+        print(f"[*] [COOKIES] {label}: {len(cookies)} cookies in context", file=sys.stderr, flush=True)
+        for c in cookies:
+            print(f"    -> {c['name']} = {c['value'][:30]}...", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[*] [COOKIES] Failed to fetch cookies at {label}: {e}", file=sys.stderr, flush=True)
+
 async def is_logged_in(page):
     try:
         await page.goto(f"{TARGET_URL_BASE}/customer/dashboard", timeout=30000)
@@ -53,6 +62,7 @@ async def is_logged_in(page):
         return False
 
 async def login_flow(page, session, mobile, api_url):
+    await print_current_cookies(page.context, "Start of login_flow")
     print(f"[*] Navigating to {TARGET_URL_BASE}/login...", file=sys.stderr, flush=True)
     await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000)
     await page.wait_for_timeout(3000)
@@ -101,6 +111,7 @@ async def login_flow(page, session, mobile, api_url):
     # Confirm login succeeded: page should no longer be on /login
     current_url = page.url
     print(f"[*] Post-login URL: {current_url}", file=sys.stderr, flush=True)
+    await print_current_cookies(page.context, "Post-login redirect completed")
     return "login" not in current_url
 
 @app.get("/")
@@ -158,6 +169,7 @@ async def grab_cookies(
                     await page.wait_for_timeout(3000)
 
                 print(f"[*] On page: {page.url}", file=sys.stderr, flush=True)
+                await print_current_cookies(context, "After arriving on RC page")
 
                 # Step 3: Capture VALID cookies NOW (before any AJAX calls that could invalidate them)
                 pre_click_cookies = await context.cookies([TARGET_URL_BASE])
