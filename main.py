@@ -53,40 +53,49 @@ async def is_logged_in(page):
         return False
 
 async def login_flow(page, session, mobile, api_url):
+    print(f"[*] Navigating to {TARGET_URL_BASE}/login...", file=sys.stderr, flush=True)
     await page.goto(f"{TARGET_URL_BASE}/login", timeout=30000)
     await page.wait_for_timeout(3000)
 
     # Click first input and type mobile
+    print(f"[*] Typing mobile number: {mobile}...", file=sys.stderr, flush=True)
     mobile_input = page.locator("input").first
     await mobile_input.click()
     await page.keyboard.type(mobile, delay=100)
     await page.wait_for_timeout(1000)
     
     # Request code
+    print("[*] Requesting OTP code...", file=sys.stderr, flush=True)
     await page.locator("#send-mobile-number").click()
 
+    print("[*] Fetching initial emails to establish baseline...", file=sys.stderr, flush=True)
     existing_msgs = await get_messages(session, api_url)
     existing_ids = {m["id"] for m in existing_msgs}
+    print(f"[*] Baseline established. Found {len(existing_ids)} existing email(s).", file=sys.stderr, flush=True)
 
     otp = None
-    for _ in range(MAX_POLLS):
+    print("[*] Starting OTP polling loop...", file=sys.stderr, flush=True)
+    for poll_idx in range(1, MAX_POLLS + 1):
+        print(f"    -> Polling for OTP (attempt {poll_idx}/{MAX_POLLS})...", file=sys.stderr, flush=True)
         otp, _ = await get_latest_otp(session, existing_ids, api_url)
         if otp:
+            print(f"[*] OTP received successfully: {otp}", file=sys.stderr, flush=True)
             break
         await asyncio.sleep(POLL_INTERVAL)
 
     if not otp:
-        print("[DEBUG] OTP lookup timed out or failed.", file=sys.stderr)
+        print("[DEBUG] OTP lookup timed out or failed.", file=sys.stderr, flush=True)
         return False
 
     await page.wait_for_timeout(3000)
     otp_inputs = page.locator("input:visible")
     
+    print("[*] Filling OTP into inputs...", file=sys.stderr, flush=True)
     for i in range(6):
         await otp_inputs.nth(i).fill(otp[i])
 
     # Wait for auto-login redirect process to complete
-    print("[*] Waiting for auto login redirect...", flush=True)
+    print("[*] Waiting for auto login redirect...", file=sys.stderr, flush=True)
     await page.wait_for_timeout(8000)
     
     # Confirm login succeeded: page should no longer be on /login
@@ -110,6 +119,8 @@ async def grab_cookies(
     req_mobile = mobile or DEFAULT_MOBILE
     req_rc = rc_number or DEFAULT_RC_NUMBER
     req_mail_api = temp_mail_api or DEFAULT_TEMP_MAIL_API
+
+    print(f"[*] grab_cookies invoked with mobile={req_mobile}, rc={req_rc}, api={req_mail_api}", file=sys.stderr, flush=True)
 
     if not req_mobile or not req_rc or not req_mail_api:
         raise HTTPException(
