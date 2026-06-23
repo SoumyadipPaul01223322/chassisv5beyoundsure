@@ -556,3 +556,77 @@ async def grab_cookies(
                     }
                 )
 
+
+@app.on_event("startup")
+async def start_keepalive():
+    asyncio.create_task(keepalive_loop())
+
+
+async def keepalive_loop():
+    print("[*] Starting session keepalive background loop...", file=sys.stderr, flush=True)
+    # Wait 10 seconds after server starts up before doing the first check
+    await asyncio.sleep(10)
+    while True:
+        try:
+            print("[*] [KEEPALIVE] Checking session status...", file=sys.stderr, flush=True)
+            
+            # Load manual cookies
+            cookies_file = os.path.join(USER_DATA_DIR, "cookies.json")
+            saved_cookies = []
+            if os.path.exists(cookies_file):
+                try:
+                    import json
+                    with open(cookies_file, "r") as f:
+                        saved_cookies = json.load(f)
+                except Exception as e:
+                    print(f"[*] [KEEPALIVE] Failed to load cookies: {e}", file=sys.stderr, flush=True)
+
+            req_mobile = DEFAULT_MOBILE
+            req_mail_api = DEFAULT_TEMP_MAIL_API
+
+            if not req_mobile or not req_mail_api:
+                print("[-] [KEEPALIVE] Missing default configurations (DEFAULT_MOBILE/DEFAULT_TEMP_MAIL_API) for keepalive check. Waiting for next cycle...", file=sys.stderr, flush=True)
+                await asyncio.sleep(300)
+                continue
+
+            async with aiohttp.ClientSession() as session:
+                async with async_playwright() as p:
+                    # Launch standard in-memory browser
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                    )
+                    context = await browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                        ignore_https_errors=True
+                    )
+                    if saved_cookies:
+                        await context.add_cookies(saved_cookies)
+
+                    page = await context.new_page()
+                    dashboard_url = f"{TARGET_URL_BASE}/customer/dashboard"
+                    await page.goto(dashboard_url, timeout=30000, wait_until="networkidle")
+                    await page.wait_for_timeout(2000)
+
+                    if "dashboard" not in page.url:
+                        print("[*] [KEEPALIVE] Session expired or invalid. Performing login flow...", file=sys.stderr, flush=True)
+                        success = await login_flow(page, session, req_mobile, req_mail_api)
+                        if success:
+                            all_cookies = await context.cookies()
+                            os.makedirs(USER_DATA_DIR, exist_ok=True)
+                            with open(cookies_file, "w") as f:
+                                json.dump(all_cookies, f)
+                            print("[+] [KEEPALIVE] Re-authentication successful. Cookies updated.", file=sys.stderr, flush=True)
+                        else:
+                            print("[-] [KEEPALIVE] Re-authentication failed.", file=sys.stderr, flush=True)
+                    else:
+                        print("[+] [KEEPALIVE] Session is active. No action needed.", file=sys.stderr, flush=True)
+
+                    await context.close()
+                    await browser.close()
+        except Exception as keepalive_err:
+            print(f"[-] [KEEPALIVE] Error occurred during check: {keepalive_err}", file=sys.stderr, flush=True)
+        
+        # Sleep for 5 minutes (300 seconds) before checking again
+        await asyncio.sleep(300)
+
