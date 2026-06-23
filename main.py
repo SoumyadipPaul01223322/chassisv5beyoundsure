@@ -60,12 +60,9 @@ async def get_latest_otp(session, existing_ids, api_url):
 async def print_current_cookies(context, label):
     try:
         cookies = await context.cookies()
-        print(f"[*] [COOKIES] {label} (context ID: {id(context)}): {len(cookies)} cookies in context", file=sys.stderr, flush=True)
-        for c in cookies:
-            expires = c.get('expires', 'Session')
-            print(f"    -> {c['name']} = {c['value'][:30]}... | domain={c.get('domain')} | path={c.get('path')} | expires={expires} | secure={c.get('secure')} | httpOnly={c.get('httpOnly')}", file=sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[*] [COOKIES] Failed to fetch cookies at {label}: {e}", file=sys.stderr, flush=True)
+        print(f"[*] [COOKIES] {label}: {len(cookies)} cookies active", file=sys.stderr, flush=True)
+    except:
+        pass
 
 async def is_logged_in(page):
     try:
@@ -312,15 +309,6 @@ async def grab_cookies(
                         log_line = f"[HTTP {response.status}] {response.url}"
                         console_logs.append(log_line)
                         print(log_line, file=sys.stderr, flush=True)
-                    try:
-                        headers = await response.all_headers()
-                        set_cookie = headers.get("set-cookie") or headers.get("Set-Cookie")
-                        if set_cookie:
-                            log_line = f"[SET-COOKIE] {response.url} set: {set_cookie}"
-                            console_logs.append(log_line)
-                            print(log_line, file=sys.stderr, flush=True)
-                    except:
-                        pass
                 page.on("response", handle_response_logging)
 
                 # Load manually saved cookies to bypass browser-session cookie deletion
@@ -336,20 +324,25 @@ async def grab_cookies(
                     except Exception as e:
                         print(f"[*] Failed to load manually saved cookies: {e}", file=sys.stderr, flush=True)
 
-                # Step 1: Go DIRECTLY to RC page (skip dashboard check for speed)
-                print("[*] Navigating directly to RC page...", file=sys.stderr, flush=True)
-                await page.goto(RC_PAGE_URL, timeout=30000, wait_until="networkidle")
+                # Step 1: Check active session by navigating to the dashboard first
+                dashboard_url = f"{TARGET_URL_BASE}/customer/dashboard"
+                print(f"[*] Checking session status via dashboard: {dashboard_url}...", file=sys.stderr, flush=True)
+                await page.goto(dashboard_url, timeout=30000, wait_until="networkidle")
                 await page.wait_for_timeout(2000)
 
-                # Step 2: If redirected to login page, perform login then come back
-                if "login" in page.url:
-                    print("[*] Session expired — performing login...", file=sys.stderr, flush=True)
+                # Step 2: If redirected to login, perform authentication
+                if "dashboard" not in page.url:
+                    print("[*] No active session found — performing login...", file=sys.stderr, flush=True)
                     success = await login_flow(page, session, req_mobile, req_mail_api)
                     if not success:
                         raise Exception("Verification flow incomplete or invalid OTP.")
-                    # After login, navigate to RC page with full load
-                    await page.goto(RC_PAGE_URL, timeout=30000, wait_until="networkidle")
-                    await page.wait_for_timeout(3000)
+                else:
+                    print("[+] Active session detected! Bypassing login flow.", file=sys.stderr, flush=True)
+
+                # Step 3: Go to RC page to trigger Vahan data
+                print("[*] Navigating to RC page...", file=sys.stderr, flush=True)
+                await page.goto(RC_PAGE_URL, timeout=30000, wait_until="networkidle")
+                await page.wait_for_timeout(3000)
 
                 print(f"[*] On page: {page.url}", file=sys.stderr, flush=True)
                 await print_current_cookies(page.context, "After arriving on RC page")
@@ -360,8 +353,7 @@ async def grab_cookies(
                     print("[*] page.context.cookies(TARGET_URL_BASE) returned nothing, fetching all cookies...", file=sys.stderr, flush=True)
                     pre_click_cookies = await page.context.cookies()
                 print(f"[*] Pre-click cookies: {len(pre_click_cookies)} found", file=sys.stderr, flush=True)
-                for c in pre_click_cookies:
-                    print(f"    -> {c['name']} = {c['value'][:40]}...", file=sys.stderr, flush=True)
+                # Cookies details print omitted for cleaner logging
 
                 xsrf = next((c["value"] for c in pre_click_cookies if c["name"] == "XSRF-TOKEN"), None)
                 session_cookie = next((c["value"] for c in pre_click_cookies if c["name"] == "bimasuraksha_session"), None)
