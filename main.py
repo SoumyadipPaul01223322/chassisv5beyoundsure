@@ -116,7 +116,7 @@ async def login_flow(page, session, mobile, api_url):
     print(f"[*] [DEBUG] Mobile input value after typing: '{typed_val}'", file=sys.stderr, flush=True)
 
     # Check button status
-    btn = page.locator("#send-mobile-number, button:has-text('Continue'), button:has-text('Send'), button:has-text('Get OTP'), button.btn-success")
+    btn = page.locator("#send-mobile-number, button:has-text('Continue'), button:has-text('Send'), button:has-text('Get OTP'), button.btn-success").first
     btn_visible = await btn.is_visible()
     btn_enabled = await btn.is_enabled()
     print(f"[*] [DEBUG] Continue button: visible={btn_visible}, enabled={btn_enabled}", file=sys.stderr, flush=True)
@@ -153,7 +153,7 @@ async def login_flow(page, session, mobile, api_url):
         await page.keyboard.type(mobile, delay=100)
         await page.wait_for_timeout(1000)
         
-        btn = page.locator("#send-mobile-number, button:has-text('Continue'), button:has-text('Send'), button:has-text('Get OTP'), button.btn-success")
+        btn = page.locator("#send-mobile-number, button:has-text('Continue'), button:has-text('Send'), button:has-text('Get OTP'), button.btn-success").first
         await btn.click()
         await page.wait_for_timeout(3000)
     
