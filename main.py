@@ -183,10 +183,31 @@ async def grab_cookies(
                 # Brief wait for cookies to settle after response
                 await page.wait_for_timeout(1000)
 
-                # Step 5: Grab FRESH cookies AFTER the response (these are the valid, rotated ones)
-                cookies = await context.cookies()
+                # Step 5: Grab FRESH cookies AFTER the response
+                # Pass the target URL so Playwright returns cookies for that domain
+                cookies = await context.cookies([TARGET_URL_BASE])
+                print(f"[*] Cookies from context.cookies(): {len(cookies)} found", file=sys.stderr, flush=True)
+                for c in cookies:
+                    print(f"    -> {c['name']} = {c['value'][:40]}...", file=sys.stderr, flush=True)
+
                 xsrf = next((c["value"] for c in cookies if c["name"] == "XSRF-TOKEN"), None)
                 session_cookie = next((c["value"] for c in cookies if c["name"] == "bimasuraksha_session"), None)
+
+                # Fallback: if context.cookies() didn't return them, try document.cookie via JS
+                if not xsrf or not session_cookie:
+                    print("[*] Cookies missing from context, trying document.cookie...", file=sys.stderr, flush=True)
+                    try:
+                        js_cookies = await page.evaluate("document.cookie")
+                        print(f"[*] document.cookie: {js_cookies[:100]}...", file=sys.stderr, flush=True)
+                        # Parse document.cookie string
+                        for pair in js_cookies.split(";"):
+                            pair = pair.strip()
+                            if pair.startswith("XSRF-TOKEN=") and not xsrf:
+                                xsrf = pair.split("=", 1)[1]
+                            elif pair.startswith("bimasuraksha_session=") and not session_cookie:
+                                session_cookie = pair.split("=", 1)[1]
+                    except Exception as e:
+                        print(f"[*] document.cookie fallback failed: {e}", file=sys.stderr, flush=True)
 
                 await context.close()
 
