@@ -211,7 +211,7 @@ async def grab_cookies(
                         print(f"[*] Intercepted request: {request.method} {request.url}", file=sys.stderr, flush=True)
                         captured_request["url"] = request.url
                         captured_request["method"] = request.method
-                        captured_request["headers"] = dict(request.headers)
+                        captured_request["headers"] = await request.all_headers()
                         captured_request["post_data"] = request.post_data
 
                 async def handle_response(response):
@@ -250,21 +250,44 @@ async def grab_cookies(
                     url = captured_request.get("url", "")
                     post_data = captured_request.get("post_data", "")
                     
-                    # Use pre-click cookies (valid, before the 401 could invalidate them)
-                    cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in pre_click_cookies)
-                    if cookie_str:
-                        headers["cookie"] = cookie_str
+                    # Try to extract cookie string from headers (case-insensitive)
+                    cookie_str = ""
+                    cookie_key = "cookie"
+                    for k, v in headers.items():
+                        if k.lower() == "cookie":
+                            cookie_str = v
+                            cookie_key = k
+                            break
 
-                    # Laravel X-XSRF-TOKEN from FRESH cookies
-                    if xsrf:
-                        headers["x-xsrf-token"] = unquote(xsrf)
+                    # Fall back to pre-click cookies if request headers didn't contain it
+                    if not cookie_str:
+                        cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in pre_click_cookies)
+                        if cookie_str:
+                            headers["cookie"] = cookie_str
+                            cookie_key = "cookie"
+
+                    # Parse values from cookie string
+                    xsrf_val = xsrf
+                    session_val = session_cookie
+                    if cookie_str:
+                        for pair in cookie_str.split(";"):
+                            pair = pair.strip()
+                            if pair.startswith("XSRF-TOKEN="):
+                                xsrf_val = pair.split("=", 1)[1]
+                            elif pair.startswith("bimasuraksha_session="):
+                                session_val = pair.split("=", 1)[1]
+
+                    # Laravel X-XSRF-TOKEN header check
+                    has_xsrf_header = any(k.lower() == "x-xsrf-token" for k in headers.keys())
+                    if not has_xsrf_header and xsrf_val:
+                        headers["x-xsrf-token"] = unquote(xsrf_val)
 
                     # Add Host and Origin
                     parsed = urlparse(url)
                     host = parsed.netloc
-                    if "host" not in headers:
+                    if not any(k.lower() == "host" for k in headers.keys()):
                         headers["host"] = host
-                    if "origin" not in headers:
+                    if not any(k.lower() == "origin" for k in headers.keys()):
                         headers["origin"] = f"{parsed.scheme}://{host}"
 
                     path = parsed.path
@@ -286,8 +309,8 @@ async def grab_cookies(
                         "post_data": post_data,
                         "cookie": cookie_str,
                         "details": {
-                            "XSRF-TOKEN": xsrf,
-                            "bimasuraksha_session": session_cookie
+                            "XSRF-TOKEN": xsrf_val,
+                            "bimasuraksha_session": session_val
                         }
                     }
                 elif xsrf and session_cookie:
