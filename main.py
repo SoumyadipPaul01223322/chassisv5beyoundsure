@@ -161,6 +161,9 @@ async def grab_cookies(
 
                 # Step 3: Capture VALID cookies NOW (before any AJAX calls that could invalidate them)
                 pre_click_cookies = await context.cookies([TARGET_URL_BASE])
+                if not pre_click_cookies:
+                    print("[*] context.cookies(TARGET_URL_BASE) returned nothing, fetching all cookies...", file=sys.stderr, flush=True)
+                    pre_click_cookies = await context.cookies()
                 print(f"[*] Pre-click cookies: {len(pre_click_cookies)} found", file=sys.stderr, flush=True)
                 for c in pre_click_cookies:
                     print(f"    -> {c['name']} = {c['value'][:40]}...", file=sys.stderr, flush=True)
