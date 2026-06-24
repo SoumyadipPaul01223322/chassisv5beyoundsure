@@ -30,6 +30,9 @@ PROXIES = [
 POLL_INTERVAL = 2
 MAX_POLLS = 60
 
+# Global in-memory cache for the grab response
+CACHED_RESPONSE = None
+
 # Fetch default configurations from environment variables to avoid exposing credentials or domains in code
 DEFAULT_MOBILE = os.getenv("DEFAULT_MOBILE", "")
 DEFAULT_RC_NUMBER = os.getenv("DEFAULT_RC_NUMBER", "")
@@ -249,8 +252,14 @@ async def index():
 async def grab_cookies(
     mobile: str = Query(None, description="Mobile number (optional, fallback to env)"),
     rc_number: str = Query(None, description="Vehicle registration number (optional, fallback to env)"),
-    temp_mail_api: str = Query(None, description="Temp mail messages URL (optional, fallback to env)")
+    temp_mail_api: str = Query(None, description="Temp mail messages URL (optional, fallback to env)"),
+    bypass_cache: bool = Query(False, description="Bypass cache and perform fresh grab flow")
 ):
+    global CACHED_RESPONSE
+    if not bypass_cache and CACHED_RESPONSE is not None:
+        print("[*] Returning cached response immediately.", file=sys.stderr, flush=True)
+        return CACHED_RESPONSE
+
     from urllib.parse import urlparse, unquote
 
     # Resolve parameter values
@@ -502,7 +511,7 @@ async def grab_cookies(
                         raw_lines.append(f"{key}: {value}")
                     raw_header = "\r\n".join(raw_lines)
 
-                    return {
+                    res_payload = {
                         "success": True,
                         "cookie": cookie_str,
                         "headers": {
@@ -513,6 +522,8 @@ async def grab_cookies(
                             "X-XSRF-TOKEN": unquote(xsrf_val) if xsrf_val else ""
                         }
                     }
+                    CACHED_RESPONSE = res_payload
+                    return res_payload
                 else:
                     raise Exception("Vahan service request was not intercepted (timeout or click failed).")
 
@@ -586,7 +597,7 @@ async def keepalive_loop():
 
             if not req_mobile or not req_mail_api:
                 print("[-] [KEEPALIVE] Missing default configurations (DEFAULT_MOBILE/DEFAULT_TEMP_MAIL_API) for keepalive check. Waiting for next cycle...", file=sys.stderr, flush=True)
-                await asyncio.sleep(300)
+                await asyncio.sleep(120)
                 continue
 
             async with aiohttp.ClientSession() as session:
@@ -608,7 +619,9 @@ async def keepalive_loop():
                     await page.goto(dashboard_url, timeout=30000, wait_until="networkidle")
                     await page.wait_for_timeout(2000)
 
-                    if "dashboard" not in page.url:
+                    is_active = "dashboard" in page.url
+                    success = False
+                    if not is_active:
                         print("[*] [KEEPALIVE] Session expired or invalid. Performing login flow...", file=sys.stderr, flush=True)
                         success = await login_flow(page, session, req_mobile, req_mail_api)
                         if success:
@@ -621,12 +634,44 @@ async def keepalive_loop():
                             print("[-] [KEEPALIVE] Re-authentication failed.", file=sys.stderr, flush=True)
                     else:
                         print("[+] [KEEPALIVE] Session is active. No action needed.", file=sys.stderr, flush=True)
+                        success = True
+
+                    if success or is_active:
+                        # Fetch the latest cookies to cache
+                        from urllib.parse import unquote
+                        current_cookies = await context.cookies([TARGET_URL_BASE])
+                        if not current_cookies:
+                            current_cookies = await context.cookies()
+                        
+                        xsrf_val = next((c["value"] for c in current_cookies if c["name"] == "XSRF-TOKEN"), None)
+                        session_val = next((c["value"] for c in current_cookies if c["name"] == "bimasuraksha_session"), None)
+                        
+                        cookie_parts = []
+                        if xsrf_val:
+                            cookie_parts.append(f"XSRF-TOKEN={xsrf_val}")
+                        if session_val:
+                            cookie_parts.append(f"bimasuraksha_session={session_val}")
+                        cookie_str = "; ".join(cookie_parts)
+                        
+                        global CACHED_RESPONSE
+                        CACHED_RESPONSE = {
+                            "success": True,
+                            "cookie": cookie_str,
+                            "headers": {
+                                "Host": "www.insurance.beyondsure.in",
+                                "Origin": "https://www.insurance.beyondsure.in",
+                                "Referer": f"{TARGET_URL_BASE}/leads/create/online?insurance_category_id=2&product_category=motor&product_type_id=3&policy_type_id=1&lead_flow=1",
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                                "X-XSRF-TOKEN": unquote(xsrf_val) if xsrf_val else ""
+                            }
+                        }
+                        print("[+] [KEEPALIVE] Global cache updated with latest response.", file=sys.stderr, flush=True)
 
                     await context.close()
                     await browser.close()
         except Exception as keepalive_err:
             print(f"[-] [KEEPALIVE] Error occurred during check: {keepalive_err}", file=sys.stderr, flush=True)
         
-        # Sleep for 5 minutes (300 seconds) before checking again
-        await asyncio.sleep(300)
+        # Sleep for 2 minutes (120 seconds) before checking again
+        await asyncio.sleep(120)
 
